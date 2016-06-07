@@ -163,7 +163,7 @@ class YamlExporter extends AbstractExporter
             }
 
             if ($associationMapping['type'] & ClassMetadataInfo::TO_ONE) {
-                $joinColumns = $associationMapping['joinColumns'];
+                $joinColumns = $associationMapping['isOwningSide'] === true ? $associationMapping['joinColumns'] : array();
                 $newJoinColumns = array();
 
                 foreach ($joinColumns as $joinColumn) {
