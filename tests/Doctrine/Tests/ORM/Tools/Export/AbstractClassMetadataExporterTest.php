@@ -21,6 +21,8 @@
 
 namespace Doctrine\Tests\ORM\Tools\Export;
 
+use Doctrine\ORM\Configuration;
+use Doctrine\ORM\Events;
 use Doctrine\ORM\Tools\Export\ClassMetadataExporter;
 use Doctrine\ORM\Mapping\ClassMetadataInfo;
 use Doctrine\ORM\Tools\EntityGenerator;
@@ -32,6 +34,8 @@ use Doctrine\Tests\Mocks\DriverMock;
 use Doctrine\Common\EventManager;
 use Doctrine\ORM\Tools\DisconnectedClassMetadataFactory;
 use Doctrine\ORM\Mapping\ClassMetadataFactory;
+use Doctrine\Tests\OrmTestCase;
+use Symfony\Component\Yaml\Parser;
 
 /**
  * Test case for ClassMetadataExporter
@@ -43,7 +47,7 @@ use Doctrine\ORM\Mapping\ClassMetadataFactory;
  * @since       2.0
  * @version     $Revision$
  */
-abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTestCase
+abstract class AbstractClassMetadataExporterTest extends OrmTestCase
 {
     protected $_extension;
 
@@ -52,12 +56,11 @@ abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTest
     protected function _createEntityManager($metadataDriver)
     {
         $driverMock = new DriverMock();
-        $config = new \Doctrine\ORM\Configuration();
+        $config = new Configuration();
         $config->setProxyDir(__DIR__ . '/../../Proxies');
         $config->setProxyNamespace('Doctrine\Tests\Proxies');
         $eventManager = new EventManager();
         $conn = new ConnectionMock(array(), $driverMock, $config, $eventManager);
-        $mockDriver = new MetadataDriverMock();
         $config->setMetadataDriverImpl($metadataDriver);
 
         return EntityManagerMock::create($conn, $config, $eventManager);
@@ -71,25 +74,25 @@ abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTest
             'xml'        => 'Doctrine\ORM\Mapping\Driver\XmlDriver',
             'yaml'       => 'Doctrine\ORM\Mapping\Driver\YamlDriver',
         );
-        $this->assertArrayHasKey($type, $mappingDriver, "There is no metadata driver for the type '" . $type . "'.");
-        $class = $mappingDriver[$type];
 
-        if ($type === 'annotation') {
-            $driver = $this->createAnnotationDriver(array($path));
-        } else {
-            $driver = new $class($path);
-        }
+        $this->assertArrayHasKey($type, $mappingDriver, "There is no metadata driver for the type '" . $type . "'.");
+
+        $class  = $mappingDriver[$type];
+        $driver = ($type === 'annotation')
+            ? $this->createAnnotationDriver(array($path))
+            : new $class($path);
+
         return $driver;
     }
 
     protected function _createClassMetadataFactory($em, $type)
     {
-        if ($type === 'annotation') {
-            $factory = new ClassMetadataFactory();
-        } else {
-            $factory = new DisconnectedClassMetadataFactory();
-        }
+        $factory = ($type === 'annotation')
+            ? new ClassMetadataFactory()
+            : new DisconnectedClassMetadataFactory();
+
         $factory->setEntityManager($em);
+
         return $factory;
     }
 
@@ -110,11 +113,14 @@ abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTest
         $type = $this->_getType();
         $cme = new ClassMetadataExporter();
         $exporter = $cme->getExporter($type, __DIR__ . '/export/' . $type);
+
         if ($type === 'annotation') {
             $entityGenerator = new EntityGenerator();
+
             $entityGenerator->setAnnotationPrefix("");
             $exporter->setEntityGenerator($entityGenerator);
         }
+
         $this->_extension = $exporter->getExtension();
 
         $exporter->setMetadata($metadata);
@@ -215,6 +221,7 @@ abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTest
     public function testFieldsAreProperlySerialized()
     {
         $type = $this->_getType();
+
         if ($type == 'xml') {
             $xml = simplexml_load_file(__DIR__ . '/export/'.$type.'/Doctrine.Tests.ORM.Tools.Export.ExportedUser.dcm.xml');
 
@@ -224,8 +231,7 @@ abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTest
 
             $nodes = $xml->xpath("/d:doctrine-mapping/d:entity/d:field[@name='name' and @type='string' and @unique='true']");
             $this->assertEquals(1, count($nodes));
-        }
-        else {
+        } else {
             $this->markTestSkipped('Test not available for '.$type.' driver');
         }
     }
@@ -355,7 +361,8 @@ abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTest
     {
         $this->assertEquals('user', $class->associationMappings['address']['inversedBy']);
     }
-	/**
+
+    /**
      * @depends testExportDirectoryAndFilesAreCreated
      */
     public function testCascadeAllCollapsed()
@@ -369,19 +376,40 @@ abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTest
             $this->assertEquals(1, count($nodes));
 
             $this->assertEquals('cascade-all', $nodes[0]->getName());
-        } elseif ($type == 'yaml') {
-
-            $yaml = new \Symfony\Component\Yaml\Parser();
+        } else if ($type == 'yaml') {
+            $yaml = new Parser();
             $value = $yaml->parse(file_get_contents(__DIR__ . '/export/'.$type.'/Doctrine.Tests.ORM.Tools.Export.ExportedUser.dcm.yml'));
 
             $this->assertTrue(isset($value['Doctrine\Tests\ORM\Tools\Export\ExportedUser']['oneToMany']['interests']['cascade']));
             $this->assertEquals(1, count($value['Doctrine\Tests\ORM\Tools\Export\ExportedUser']['oneToMany']['interests']['cascade']));
             $this->assertEquals('all', $value['Doctrine\Tests\ORM\Tools\Export\ExportedUser']['oneToMany']['interests']['cascade'][0]);
-
         } else {
             $this->markTestSkipped('Test not available for '.$type.' driver');
         }
     }
+
+    /**
+     * @depends testExportedMetadataCanBeReadBackIn
+     *
+     * @param ClassMetadata $class
+     */
+    public function testEntityListenersGetExported($class)
+    {
+        $this->assertNotEmpty($class->entityListeners);
+
+        $this->assertCount(2, $class->entityListeners[Events::prePersist]);
+        $this->assertCount(2, $class->entityListeners[Events::postPersist]);
+
+        $this->assertEquals(UserListener::class, $class->entityListeners[Events::prePersist][0]['class']);
+        $this->assertEquals('customPrePersist', $class->entityListeners[Events::prePersist][0]['method']);
+        $this->assertEquals(GroupListener::class, $class->entityListeners[Events::prePersist][1]['class']);
+        $this->assertEquals('prePersist', $class->entityListeners[Events::prePersist][1]['method']);
+        $this->assertEquals(UserListener::class, $class->entityListeners[Events::postPersist][0]['class']);
+        $this->assertEquals('customPostPersist', $class->entityListeners[Events::postPersist][0]['method']);
+        $this->assertEquals(AddressListener::class, $class->entityListeners[Events::postPersist][1]['class']);
+        $this->assertEquals('customPostPersist', $class->entityListeners[Events::postPersist][1]['method']);
+    }
+
     public function __destruct()
     {
 #        $this->_deleteDirectory(__DIR__ . '/export/'.$this->_getType());
@@ -393,11 +421,13 @@ abstract class AbstractClassMetadataExporterTest extends \Doctrine\Tests\OrmTest
             return unlink($path);
         } else if (is_dir($path)) {
             $files = glob(rtrim($path,'/').'/*');
+
             if (is_array($files)) {
                 foreach ($files as $file){
                     $this->_deleteDirectory($file);
                 }
             }
+
             return rmdir($path);
         }
     }
@@ -414,4 +444,30 @@ class Phonenumber
 class Group
 {
 
+}
+class UserListener
+{
+    /**
+     * @\Doctrine\ORM\Mapping\PrePersist
+     */
+    public function customPrePersist() {}
+
+    /**
+     * @\Doctrine\ORM\Mapping\PostPersist
+     */
+    public function customPostPersist() {}
+}
+class GroupListener
+{
+    /**
+     * @\Doctrine\ORM\Mapping\PrePersist
+     */
+    public function prePersist() {}
+}
+class AddressListener
+{
+    /**
+     * @\Doctrine\ORM\Mapping\PostPersist
+     */
+    public function customPostPersist() {}
 }

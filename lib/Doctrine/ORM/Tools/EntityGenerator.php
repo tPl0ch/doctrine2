@@ -1004,6 +1004,7 @@ public function __construct(<params>)
                 'generateDiscriminatorColumnAnnotation',
                 'generateDiscriminatorMapAnnotation',
                 'generateEntityAnnotation',
+                'generateEntityListenerAnnotation',
             );
 
             foreach ($methods as $method) {
@@ -1728,6 +1729,33 @@ public function __construct(<params>)
         $lines[] = $this->spaces . ' */';
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * @param ClassMetadataInfo $metadata
+     *
+     * @return string
+     */
+    protected function generateEntityListenerAnnotation(ClassMetadataInfo $metadata)
+    {
+        if (0 === count($metadata->entityListeners)) {
+            return '';
+        }
+
+        $processedClasses = [];
+
+        foreach ($metadata->entityListeners as $event => $eventListeners) {
+            foreach ($eventListeners as $eventListener) {
+                $processedClasses[] = '"' . $eventListener['class'] . '"';
+            }
+        }
+
+        return sprintf(
+            '%s%s({%s})',
+            '@' . $this->annotationsPrefix,
+            'EntityListeners',
+            implode(',', array_unique($processedClasses))
+        );
     }
 
     /**
